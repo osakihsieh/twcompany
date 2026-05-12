@@ -53,8 +53,10 @@ $update_column = new StdClass;
 $insert_column = new StdClass;
 
 $changed_unit = array();
+$changed_county = array();
 $checking = array();
 $names = array();
+$counties = array();
 $split_column = array_search('行業代號', $columns);
 if (!$split_column) {
     throw new Exception("找不到行業代號開始欄位");
@@ -86,6 +88,7 @@ while ($rows = fgetcsv($fp, 0, ',')) {
     unset($values['統一編號']);
 
     $names[intval($no)] = $values['營業人名稱'];
+    $counties[intval($no)] = mb_substr($values['營業地址'], 0, 3, 'UTF-8');
 
     foreach ($values as $k => $v) {
         $column_id = FIAColumnGroup::getColumnId($k);
@@ -114,6 +117,7 @@ while ($rows = fgetcsv($fp, 0, ',')) {
                     //'行業', // 2023-01-31 大量更新
                 ))) {  // 如果以上欄位變更，不需要去經濟部更新
                 $changed_unit[$unit_data['id']] = $names[$unit_data['id']];
+                $changed_county[$unit_data['id']] = $counties[$unit_data['id']];
                 }
             }
             unset($checking[$id]);
@@ -125,10 +129,12 @@ while ($rows = fgetcsv($fp, 0, ',')) {
             }
             $insert_column->{$id}[] = $column_id;
             $changed_unit[$id] = $names[$id];
+            $changed_county[$id] = $counties[$id];
         }
         $inserting = array_merge($inserting, $checking);
         $checking = array();
         $names = array();
+        $counties = array();
     }
 }
 if (count($checking)) {
@@ -153,6 +159,7 @@ if (count($checking)) {
                     '使用統一發票',
                 ))) {  // 如果以上欄位變更，不需要去經濟部更新
                 $changed_unit[$unit_data['id']] = $names[$unit_data['id']];
+                $changed_county[$unit_data['id']] = $counties[$unit_data['id']];
                 }
             }
             unset($checking[$id]);
@@ -164,10 +171,12 @@ if (count($checking)) {
             }
             $insert_column->{$id}[] = $column_id;
             $changed_unit[$id] = $names[$id];
+            $changed_county[$id] = $counties[$id];
         }
         $inserting = array_merge($inserting, $checking);
         $checking = array();
         $names = array();
+        $counties = array();
     }
 file_put_contents('change.log', json_encode($changed_unit));
 $no = 0;
@@ -182,7 +191,7 @@ foreach ($changed_unit as $id => $name) {
     } elseif (strpos($name, '公司')) {
         $u = Updater2::update($id);
     } else {
-        $u = Updater2::updateBussiness($id);
+        $u = Updater2::updateBussiness($id, [], $changed_county[intval($id)] ?? null);
     }
     if ($u) {
         $u->updateSearch();

@@ -262,6 +262,7 @@ class Updater2
     }
 
     protected static $_curl = null;
+    protected static $_agency_map = null;
 
     public static function getCURL($reconnect = false)
     {
@@ -277,12 +278,17 @@ class Updater2
         curl_setopt($curl, CURLOPT_FRESH_CONNECT, true);
         curl_setopt($curl, CURLOPT_FORBID_REUSE, true);
         curl_setopt($curl, CURLOPT_COOKIEFILE, '');
-        curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:84.0) Gecko/20100101 Firefox/84.0');
+        curl_setopt($curl, CURLOPT_HTTPHEADER, [
+            'Origin: https://findbiz.nat.gov.tw',
+        ]);
+        curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0');
         curl_setopt($curl, CURLOPT_DNS_USE_GLOBAL_CACHE, false);
         if (getenv('PROXY_URL')) {
             curl_setopt($curl, CURLOPT_PROXY, getenv('PROXY_URL'));
         }
-        curl_setopt($curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        //curl_setopt($curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+        // ignore certificate check
+        curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
         curl_exec($curl);
         $info = curl_getinfo($curl);
 
@@ -293,6 +299,7 @@ class Updater2
         curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($curl, CURLOPT_HEADER, true);
         curl_setopt($curl, CURLINFO_HEADER_OUT, true);
+        curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
         $content = curl_exec($curl);
         $info = curl_getinfo($curl);
 
@@ -300,94 +307,18 @@ class Updater2
         return $curl;
     }
 
-    public static function updateBussiness($id, $options = array())
+    public static function updateBussiness($id, $options = array(), $county = null)
     {
-        $found = false;
-        $url = "https://findbiz.nat.gov.tw/fts/query/QueryList/queryList.do";
-        for ($retry = 0; true; $retry ++) {
-            $curl = self::getCURL();
-            curl_setopt($curl, CURLOPT_URL, $url);
-            curl_setopt($curl, CURLOPT_POSTFIELDS, "errorMsg=&validatorOpen=N&rlPermit=0&userResp=&curPage=0&fhl=zh_TW&qryCond={$id}&infoType=D&cmpyType=&brCmpyType=&qryType=busmType&busmType=true&factType=&lmtdType=&isAlive=all&busiItemMain=&busiItemSub=");
-            curl_setopt($curl, CURLOPT_REFERER, $url); //'https://gcis.nat.gov.tw/pub/cmpy/cmpyInfoListAction.do');
-
-            $content = curl_exec($curl);
-            $info = curl_getinfo($curl);
-            error_log("post bussiness {$id}");
-            echo json_encode($info) . "\n";
-
-            sleep(5);
-            if (strpos($content, '很抱歉，我們無法找到符合條件的查詢結果。')) {
-                trigger_error("找不到商業登記: $id", E_USER_WARNING);
-                sleep(1);
-                return;
-            }
-
-            $content = str_replace('<head>', '<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">', $content);
-            $doc = new DOMDocument;
-            @$doc->loadHTML($content);
-
-            if (!$table_dom = $doc->getElementById('eslist-table')) {
-                $wait = 10;
-                error_log("抓取 {$id} 失敗，等待 {$wait} 秒再重試");
-                $curl = self::getCURL(true);
-
-                sleep($wait);
-                if ($retry > 3) {
-                    readline('中斷，請讓這個 IP 通過再說');
-                }
-                continue;
-            }
-            $found = true;
-            break;
-        }
-        if (!$found) {
-            //print_r($content);
-            throw new Exception("{$id} 連續三次抓取失敗");
-        }
-        $hit_href = array();
-        foreach ($table_dom->getElementsByTagName('tbody')->item(0)->getElementsByTagName('tr') as $tr_dom) {
-            $td_doms = $tr_dom->getElementsByTagName('td');
-            if ($td_doms->length < 7) {
-                continue;
-            }
-
-            $a_dom = $tr_dom->getElementsByTagName('a')->item(0);
-            $href = preg_replace('#\s*#', '', $a_dom->getAttribute('href'));
-            if (strpos($href, '/fts/query/QueryBusmDetail/queryBusmDetail.do') === false) {
-                continue;
-            }
-            $date = $td_doms->item(6)->nodeValue;
-            if ($td_doms->item(6)->getAttribute('data-title') != '核准變更日期') {
-                throw new Exception("預期表格第七格應該是「核准變更日期」");
-            }
-            $hit_href[$href] = $date;
-        }
-        arsort($hit_href);
-        if (count($hit_href) == 0) {
-            throw new Exception("找不到商號");
-        }
-
-        $hit_href = array_keys($hit_href);
-        $content = self::http("https://findbiz.nat.gov.tw" . $hit_href[0]);
-        if (!$content) {
-            trigger_error("找不到網頁內容: $url", E_USER_WARNING);
+        $info = self::parseAPIBussiness($id, $county);
+        if (!$info) {
+            trigger_error("API 找不到商業登記: $id", E_USER_WARNING);
             return;
         }
-        $info = self::parseBussinessFile($content);
-        $info->url = $hit_href[0];
-
-        if (!$parsed_id = $info->{'商業統一編號'}) {
-            trigger_error("找不到統一編號: $id", E_USER_WARNING);
-            return;
-
-            throw new Exception('統一編號 not found?');
-        }
-        unset($info->{'商業統一編號'});
 
         if (!$unit = Unit::find($id)) {
             $unit = Unit::insert(array(
                 'id' => $id,
-                'type' => 2, // 商業登記
+                'type' => 2,
             ));
         }
         $unit->updateData($info);
@@ -452,9 +383,7 @@ class Updater2
     public static function update($id, $options = array())
     {
         $unit = Unit::find($id);
-        if (!$unit) {
-            // 找不到檔案就不用判斷了
-        } else {
+        if ($unit) {
             $modified_at = $unit->updated_at;
             if (array_key_exists('month', $options)) {
                 $query_time = strtotime('+1 month', mktime(0, 0, 0, $options['month'], 1, $options['year']));
@@ -464,100 +393,11 @@ class Updater2
             }
         }
 
-        $found = false;
-        $url = "https://findbiz.nat.gov.tw/fts/query/QueryList/queryList.do";
-        for ($retry = 0; true; $retry ++) {
-            $curl = self::getCURL();
-            curl_setopt($curl, CURLOPT_URL, $url);
-            curl_setopt($curl, CURLOPT_POSTFIELDS, "errorMsg=&validatorOpen=N&rlPermit=0&userResp=&curPage=0&fhl=zh_TW&qryCond={$id}&infoType=D&qryType=cmpyType&cmpyType=true&brCmpyType=&busmType=&factType=&lmtdType=&isAlive=all&busiItemMain=&busiItemSub=");
-            curl_setopt($curl, CURLOPT_REFERER, $url); //'https://gcis.nat.gov.tw/pub/cmpy/cmpyInfoListAction.do');
-
-            $content = curl_exec($curl);
-            $info = curl_getinfo($curl);
-            error_log("post company {$id}");
-            echo json_encode($info) . "\n";
-
-            sleep(5);
-            echo $content;
-            if (strpos($content, '很抱歉，我們無法找到符合條件的查詢結果。')) {
-                trigger_error("找不到商業登記: $id", E_USER_WARNING);
-                return;
-            }
-
-            $content = str_replace('<head>', '<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">', $content);
-            $doc = new DOMDocument;
-            @$doc->loadHTML($content);
-
-            if (!$table_dom = $doc->getElementById('eslist-table')) {
-                $wait = 10;
-                error_log("抓取 {$id} 失敗，等待 {$wait} 秒再重試");
-                $curl = self::getCURL(true);
-
-                sleep($wait);
-                if ($retry > 3) {
-                    readline('中斷，請讓這個 IP 通過再說');
-                }
-                continue;
-            }
-            $found = true;
-            break;
-        }
-        if (!$found) {
-            //print_r($content);
-            throw new Exception("{$id} 連續三次抓取失敗");
-        }
-        $hit_href = array();
-        foreach ($table_dom->getElementsByTagName('tbody')->item(0)->getElementsByTagName('tr') as $tr_dom) {
-            $td_doms = $tr_dom->getElementsByTagName('td');
-            if ($td_doms->length < 7) {
-                continue;
-            }
-
-            $a_dom = $tr_dom->getElementsByTagName('a')->item(0);
-            $href = preg_replace('#\s*#', '', $a_dom->getAttribute('href'));
-            if (strpos($href, '/fts/query/QueryCmpyDetail/queryCmpyDetail.do') === false) {
-                continue;
-            }
-            $date = $td_doms->item(6)->nodeValue;
-            if ($td_doms->item(6)->getAttribute('data-title') != '核准變更日期') {
-                throw new Exception("預期表格第七格應該是「核准變更日期」");
-            }
-            $hit_href[$href] = $date;
-        }
-        arsort($hit_href);
-        if (count($hit_href) == 0) {
-            throw new Exception("找不到商號");
-        }
-
-        $hit_href = array_keys($hit_href);
-
-        $url = "https://findbiz.nat.gov.tw" . $hit_href[0];
-        // 一秒只更新一個檔案
-        while (!is_null(self::$_last_fetch) and (microtime(true) - self::$_last_fetch) < 0.5) {
-            usleep(1000);
-        }
-        self::$_last_fetch = microtime(true);
-
-        $content = self::http($url);
-        if (!$content) {
-            trigger_error("找不到網頁內容: $url", E_USER_WARNING);
+        $info = self::parseAPICompany($id);
+        if (!$info) {
+            trigger_error("API 找不到公司: $id", E_USER_WARNING);
             return;
         }
-
-        $info = self::parseFile($content);
-        $has_branch = false;
-        if (property_exists($info, '_has_branch')) {
-            $has_branch = $info->_has_branch;
-            unset($info->_has_branch);
-        }
-
-        if (!$parsed_id = $info->{'統一編號'}) {
-            trigger_error("找不到統一編號: $id", E_USER_WARNING);
-            return;
-
-            throw new Exception('統一編號 not found?');
-        }
-        unset($info->{'統一編號'});
 
         if (!$unit = Unit::find($id)) {
             $unit = Unit::insert(array(
@@ -568,23 +408,30 @@ class Updater2
             $unit->update(array('type' => 1));
         }
 
-        if ($has_branch) {
-            $branch_ids = self::searchBranch($unit->id());
-        } else {
-            $branch_ids = array();
+        // 一次 API 取得所有分公司資料
+        $branch_data_list = self::fetchAPIRaw('FDB8D2C8-573D-4276-BFA4-8D3925ABE1CB', $id);
+        $branches = array();
+        foreach ($branch_data_list as $branch) {
+            $branch_id = str_pad($branch['Branch_Office_Business_Accounting_NO'], 8, '0', STR_PAD_LEFT);
+            $branches[$branch_id] = $branch;
         }
 
-        if (!array_key_exists($unit->id(), $branch_ids)) {
+        if (!array_key_exists($unit->id(), $branches)) {
             $unit->updateData($info);
         }
-        foreach ($branch_ids as $id => $name) {
-            // 跳過 branch 等同自己的
-            if ($id == $unit->id()) {
-                $info->{'分公司名稱'} = $name;
+        foreach ($branches as $branch_id => $branch) {
+            if ($branch_id == $unit->id()) {
+                $info->{'分公司名稱'} = $branch['Branch_Office_Name'];
                 $unit->updateData($info);
                 continue;
             }
-            self::updateBranch($id);
+            $branch_info = self::parseAPIBranch($branch, $unit->id());
+            if (!$branch_unit = Unit::find($branch_id)) {
+                $branch_unit = Unit::insert(array('id' => $branch_id, 'type' => 3));
+            } else {
+                $branch_unit->update(array('type' => 3));
+            }
+            $branch_unit->updateData($branch_info);
         }
         return $unit;
     }
@@ -599,9 +446,10 @@ class Updater2
             }
             curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($curl, CURLOPT_TIMEOUT, 20);
-            curl_setopt($curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-            curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:84.0) Gecko/20100101 Firefox/84.0');
+            //curl_setopt($curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0');
             curl_setopt($curl, CURLOPT_REFERER, $url); //'https://gcis.nat.gov.tw/pub/cmpy/cmpyInfoListAction.do');
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
             $content = curl_exec($curl);
             $info = curl_getinfo($curl);
             curl_close($curl);
@@ -626,9 +474,10 @@ class Updater2
             curl_setopt($curl, CURLOPT_URL, 'https://findbiz.nat.gov.tw/fts/query/QueryCmpyDetail/queryCmpyDetail.do');
             curl_setopt($curl, CURLOPT_REFERER, 'https://findbiz.nat.gov.tw/fts/query/QueryCmpyDetail/queryCmpyDetail.do');
             curl_setopt($curl, CURLOPT_POST, true);
-            curl_setopt($curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-            curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:84.0) Gecko/20100101 Firefox/84.0');
+            //curl_setopt($curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+            curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0');
             curl_setopt($curl, CURLOPT_POSTFIELDS, "banNo={$id}&brBanNo=&banKey=&estbId=&objectId=&CPage={$page}&brCmpyPage=Y&eng=false&CPageHistory=&historyPage=&chgAppDate=");
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
             $content = curl_exec($curl);
             $content = str_replace('<head>', '<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">', $content);
             $doc = new DOMDocument;
@@ -655,5 +504,257 @@ class Updater2
         }
 
         return $ids;
+    }
+
+    // -------------------------------------------------------------------------
+    // API-based methods (data.gcis.nat.gov.tw)
+    // -------------------------------------------------------------------------
+
+    private static function parseROCDate($str)
+    {
+        $str = trim($str);
+        if ($str === '') {
+            return null;
+        }
+        return [
+            'year'  => intval(substr($str, 0, 3)) + 1911,
+            'month' => intval(substr($str, 3, 2)),
+            'day'   => intval(substr($str, 5, 2)),
+        ];
+    }
+
+    public static function fetchAPIRaw($uuid, $id)
+    {
+        $url = "https://data.gcis.nat.gov.tw/od/data/api/{$uuid}?\$format=json&\$filter=Business_Accounting_NO%20eq%20{$id}";
+        $content = self::http($url);
+        return json_decode($content, true) ?: [];
+    }
+
+    public static function parseAPICompany($id)
+    {
+        $api1 = self::fetchAPIRaw('236EE382-4942-41A9-BD03-CA0709025E7C', $id); // 行業別
+        $api3 = self::fetchAPIRaw('5F64D864-61CB-4D0D-8AD9-492047CC1EA6', $id); // 資本額/基本資料
+        $api4 = self::fetchAPIRaw('4E5F7653-1B91-4DDC-99D5-468530FAE396', $id); // 董監事
+
+        if (empty($api3)) {
+            return null;
+        }
+
+        $d = $api3[0];
+        $info = new StdClass;
+
+        $info->{'公司名稱'}         = $d['Company_Name'];
+        $info->{'登記現況'}         = $d['Company_Status_Desc'];
+        $info->{'登記機關'}         = $d['Register_Organization_Desc'];
+        $info->{'資本總額(元)'}     = number_format($d['Capital_Stock_Amount']);
+        if ($d['Paid_In_Capital_Amount'] > 0) {
+            $info->{'實收資本額(元)'} = number_format($d['Paid_In_Capital_Amount']);
+        }
+        $info->{'代表人姓名'}       = $d['Responsible_Name'];
+        $info->{'公司所在地'}       = $d['Company_Location'];
+        $info->{'核准設立日期'}     = self::parseROCDate($d['Company_Setup_Date']);
+        $info->{'最後核准變更日期'} = self::parseROCDate($d['Change_Of_Approval_Data']);
+
+        if ($date = self::parseROCDate($d['Revoke_App_Date'])) {
+            $info->{'廢止日期'} = $date;
+        }
+        if ($date = self::parseROCDate($d['Sus_Beg_Date'])) {
+            $info->{'停業日期(起)'} = $date;
+        }
+        if ($date = self::parseROCDate($d['Sus_End_Date'])) {
+            $info->{'停業日期(迄)'} = $date;
+        }
+
+        $info->{'所營事業資料'} = [];
+        if (!empty($api1[0]['Cmp_Business'])) {
+            foreach ($api1[0]['Cmp_Business'] as $item) {
+                $info->{'所營事業資料'}[] = [trim($item['Business_Item']), $item['Business_Item_Desc']];
+            }
+        }
+
+        $info->{'經理人名單'} = [];
+
+        $info->{'董監事名單'} = [];
+        foreach ($api4 as $i => $dir) {
+            $row = new StdClass;
+            $row->{'序號'}       = str_pad($i + 1, 4, '0', STR_PAD_LEFT);
+            $row->{'職稱'}       = $dir['Person_Position_Name'];
+            $row->{'姓名'}       = $dir['Person_Name'];
+            $row->{'所代表法人'} = empty($dir['Juristic_Person_Name'])
+                ? ''
+                : [0, $dir['Juristic_Person_Name']];
+            $row->{'出資額'}     = number_format($dir['Person_Shareholding']);
+            $info->{'董監事名單'}[] = $row;
+        }
+
+        return $info;
+    }
+
+    private static function loadAgencyCodes()
+    {
+        if (!is_null(self::$_agency_map)) {
+            return self::$_agency_map;
+        }
+        self::$_agency_map = ['by_code' => [], 'by_name' => [], 'by_county' => []];
+        $fp = fopen(__DIR__ . '/../maps/agency.csv', 'r');
+        fgetcsv($fp); // skip header
+        while ($row = fgetcsv($fp)) {
+            if (count($row) < 2) continue;
+            [$code, $name] = $row;
+            self::$_agency_map['by_code'][$code] = $name;
+            self::$_agency_map['by_name'][$name]  = $code;
+
+            // 縣市名稱：前3字，福建省例外取第4-6字
+            $county = mb_substr($name, 0, 3, 'UTF-8') === '福建省'
+                ? mb_substr($name, 3, 3, 'UTF-8')
+                : mb_substr($name, 0, 3, 'UTF-8');
+            self::$_agency_map['by_county'][$county] = $code;
+        }
+        fclose($fp);
+        return self::$_agency_map;
+    }
+
+    private static function normalizeCounty($county)
+    {
+        return str_replace('台', '臺', trim($county));
+    }
+
+    private static function findAgencyCode($id, $county = null)
+    {
+        $map = self::loadAgencyCodes();
+
+        // 有指定縣市就直接查，O(1)
+        if ($county) {
+            $county = self::normalizeCounty($county);
+            if (isset($map['by_county'][$county])) {
+                return $map['by_county'][$county];
+            }
+        }
+
+        // 查 DB 已存的登記機關，反查 agency code
+        $unit = Unit::find($id);
+        if ($unit) {
+            $db_data = $unit->getData();
+            if (property_exists($db_data, '登記機關')) {
+                $agency_name = $db_data->{'登記機關'};
+                if (isset($map['by_name'][$agency_name])) {
+                    return $map['by_name'][$agency_name];
+                }
+            }
+        }
+
+        // 最後才逐一嘗試所有 agency（最多 23 次）
+        foreach ($map['by_code'] as $code => $name) {
+            $url = "https://data.gcis.nat.gov.tw/od/data/api/7E6AFA72-AD6A-46D3-8681-ED77951D912D?\$format=json&\$filter=President_No%20eq%20{$id}%20and%20Agency%20eq%20{$code}&\$top=1";
+            $content = self::http($url);
+            $data = json_decode($content, true);
+            if (!empty($data)) {
+                return $code;
+            }
+            sleep(1);
+        }
+
+        return null;
+    }
+
+    public static function fetchAPIBussinessRaw($uuid, $id, $agency)
+    {
+        $filter = "President_No%20eq%20{$id}%20and%20Agency%20eq%20{$agency}";
+        $url = "https://data.gcis.nat.gov.tw/od/data/api/{$uuid}?\$format=json&\$filter={$filter}&\$top=50";
+        $content = self::http($url);
+        return json_decode($content, true) ?: [];
+    }
+
+    public static function parseAPIBussiness($id, $county = null)
+    {
+        $agency = self::findAgencyCode($id, $county);
+        if (!$agency) {
+            error_log("找不到 agency for bussiness {$id}");
+            return null;
+        }
+
+        $api1 = self::fetchAPIBussinessRaw('7E6AFA72-AD6A-46D3-8681-ED77951D912D', $id, $agency); // 基本資料
+        $api2 = self::fetchAPIBussinessRaw('F570BC9A-DA4C-4813-8087-FB9CE95F9D38', $id, $agency); // 營業項目
+
+        if (empty($api1)) {
+            return null;
+        }
+
+        $d = $api1[0];
+        $info = new StdClass;
+
+        $info->{'商業名稱'}     = $d['Business_Name'];
+        $info->{'登記現況'}     = $d['Business_Current_Status_Desc'];
+        $info->{'組織類型'}     = $d['Business_Organization_Type_Desc'];
+        $info->{'登記機關'}     = $d['Agency_Desc'];
+        $info->{'資本額(元)'}   = number_format($d['Business_Register_Funds']);
+        $info->{'地址'}         = $d['Business_Address'];
+        $info->{'核准設立日期'} = self::parseROCDate($d['Business_Setup_Approve_Date']);
+        $info->{'最近異動日期'} = self::parseROCDate($d['Business_Last_Change_Date']);
+
+        // 負責人/合夥人姓名 & 出資額(元)
+        if (!empty($d['Business_Director']) && is_array($d['Business_Director'])) {
+            $info->{'出資額(元)'} = new StdClass;
+            foreach ($d['Business_Director'] as $dir) {
+                $duty  = $dir['Business_Duty_Desc'];
+                $name  = $dir['Name'];
+                $funds = strval($dir['Funds']); // 不加逗號，對應 parseBussinessFile() 的 str_replace(',', '')
+
+                $field = ($duty === '合夥人') ? '合夥人姓名' : '負責人姓名';
+                if (property_exists($info, $field)) {
+                    if (is_string($info->{$field})) {
+                        $info->{$field} = [$info->{$field}];
+                    }
+                    $info->{$field}[] = $name;
+                } else {
+                    $info->{$field} = $name;
+                }
+                $info->{'出資額(元)'}->{$name} = $funds;
+            }
+        }
+
+        // 營業項目：重組成 "CODE 名稱\nCODE 名稱" 字串
+        if (!empty($api2) && !empty($api2[0]['Business_Item_Old']) && is_array($api2[0]['Business_Item_Old'])) {
+            $lines = [];
+            foreach ($api2[0]['Business_Item_Old'] as $item) {
+                $lines[] = $item['Business_Item'] . ' ' . $item['Business_Item_Desc'];
+            }
+            $info->{'營業項目'} = implode("\n", $lines);
+        }
+
+        return $info;
+    }
+
+    public static function searchBranchAPI($id)
+    {
+        $branches = self::fetchAPIRaw('FDB8D2C8-573D-4276-BFA4-8D3925ABE1CB', $id);
+        $ids = [];
+        foreach ($branches as $branch) {
+            $branch_id = str_pad($branch['Branch_Office_Business_Accounting_NO'], 8, '0', STR_PAD_LEFT);
+            $ids[$branch_id] = $branch['Branch_Office_Name'];
+        }
+        return $ids;
+    }
+
+    public static function parseAPIBranch($branch_data, $parent_id)
+    {
+        $info = new StdClass;
+        $info->{'分公司名稱'}         = $branch_data['Branch_Office_Name'];
+        $info->{'分公司所在地'}       = $branch_data['Branch_Office_Location'];
+        $info->{'分公司經理姓名'}     = $branch_data['Branch_Office_Manager_Name'];
+        $info->{'分公司狀況'}         = $branch_data['Branch_Office_Status_Desc'];
+        $info->{'總(本)公司統一編號'} = $parent_id;
+
+        if ($date = self::parseROCDate($branch_data['BR_ESTAB_DATE'])) {
+            $info->{'核准設立日期'} = $date;
+        }
+        if ($date = self::parseROCDate($branch_data['CHG_APP_DATE'])) {
+            $info->{'最後核准變更日期'} = $date;
+        }
+        if ($date = self::parseROCDate($branch_data['Revoke_App_Date'])) {
+            $info->{'廢止日期'} = $date;
+        }
+
+        return $info;
     }
 }
