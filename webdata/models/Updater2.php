@@ -325,54 +325,40 @@ class Updater2
         return $unit;
     }
 
-    public static function updateBranch($id, $options = array())
+    public static function updateBranch($id, $options = array(), $parent_id = null)
     {
-        $unit = Unit::find($id);
-        if (!$unit) {
-            // 找不到檔案就不用判斷了
-        } else {
-            $modified_at = $unit->updated_at;
-            if (array_key_exists('month', $options)) {
-                $query_time = strtotime('+1 month', mktime(0, 0, 0, $options['month'], 1, $options['year']));
-                if ($query_time < $modified_at) {
-                    return;
+        if (!$parent_id) {
+            $unit = Unit::find($id);
+            if ($unit) {
+                $db_data = $unit->getData();
+                if (property_exists($db_data, '總(本)公司統一編號')) {
+                    $parent_id = $db_data->{'總(本)公司統一編號'};
                 }
             }
         }
-        $url = "https://findbiz.nat.gov.tw/fts/query/QueryBrCmpyDetail/queryBrCmpyDetail.do?objectId=" .  urlencode(base64_encode('BC' . $id)) . '&brBanNo=' . urlencode($id);
-        // 一秒只更新一個檔案
-        while (!is_null(self::$_last_fetch) and (microtime(true) - self::$_last_fetch) < 0.5) {
-            usleep(1000);
-        }
-        self::$_last_fetch = microtime(true);
-
-        $content = self::http($url);
-        if (!$content) {
-            trigger_error("找不到網頁內容: $url", E_USER_WARNING);
+        if (!$parent_id) {
+            trigger_error("找不到分公司的總公司統一編號: $id", E_USER_WARNING);
             return;
         }
 
-        $info = self::parseBranchFile($content);
-
-        if (!$parsed_id = $info->{'分公司統一編號'}) {
-            trigger_error("找不到統一編號: $id", E_USER_WARNING);
+        $branch_data_list = self::fetchAPIRaw('FDB8D2C8-573D-4276-BFA4-8D3925ABE1CB', $parent_id);
+        $branch_data = null;
+        foreach ($branch_data_list as $branch) {
+            $branch_id = str_pad($branch['Branch_Office_Business_Accounting_NO'], 8, '0', STR_PAD_LEFT);
+            if ($branch_id === $id) {
+                $branch_data = $branch;
+                break;
+            }
+        }
+        if (!$branch_data) {
+            trigger_error("API 找不到分公司資料: $id (parent: $parent_id)", E_USER_WARNING);
             return;
+        }
 
-            throw new Exception('統一編號 not found?');
-        }
-        if ($info->{'總(本)公司統一編號'} == $info->{'分公司統一編號'}) {
-            return self::update($id);
-        }
-        if (!$info->{'總(本)公司統一編號'}) {
-            return;
-        }
-        unset($info->{'分公司統一編號'});
+        $info = self::parseAPIBranch($branch_data, $parent_id);
 
         if (!$unit = Unit::find($id)) {
-            $unit = Unit::insert(array(
-                'id' => $id,
-                'type' => 3,
-            ));
+            $unit = Unit::insert(array('id' => $id, 'type' => 3));
         } else {
             $unit->update(array('type' => 3));
         }
