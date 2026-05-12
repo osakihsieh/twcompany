@@ -55,7 +55,7 @@ class Crawler
     public static function crawlerBussiness($year, $month)
     {
         $content = file_get_contents(self::fetch('https://serv.gcis.nat.gov.tw/moeadsBF/bms/report.jsp'));
-        $content = iconv('big5', 'utf-8', $content);
+        //$content = iconv('big5', 'utf-8', $content);
         preg_match('#<select name="area">(.*?)</select>#s', $content, $matches);
         preg_match_all('#<option value="(.*?)">(.*?)</option>#', $matches[1], $matches);
 
@@ -91,7 +91,6 @@ class Crawler
     public static function crawlerMonth($year, $month)
     {
         $content = file_get_contents(self::fetch('https://serv.gcis.nat.gov.tw/pub/cmpy/reportReg.jsp'));
-        $content = iconv('big5', 'utf-8', $content);
         preg_match('#<select name="org">(.*?)</select>#s', $content, $matches);
         preg_match_all('#<option value="(.*?)">(.*?)</option>#', $matches[1], $matches);
 
