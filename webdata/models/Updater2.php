@@ -579,7 +579,7 @@ class Updater2
         return $info;
     }
 
-    private static function loadAgencyCodes()
+    public static function loadAgencyCodes()
     {
         if (!is_null(self::$_agency_map)) {
             return self::$_agency_map;

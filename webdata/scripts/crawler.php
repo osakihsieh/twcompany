@@ -60,8 +60,18 @@ class CustomCrawler
                 }
             }
         } elseif ('bussiness-continue' == $type) {
-            $ids = explode("\n", file_get_contents('ids'));
-            $pos = array_search($year, $ids);
+            $lines = explode("\n", trim(file_get_contents('ids')));
+            $id_county = [];
+            foreach ($lines as $line) {
+                if (strpos($line, ',') !== false) {
+                    [$lid, $lcounty] = explode(',', $line, 2);
+                    $id_county[$lid] = $lcounty;
+                } else {
+                    $id_county[$line] = null;
+                }
+            }
+            $ids = array_keys($id_county);
+            $pos = array_search($year, $ids); // $year holds the continue-from ID
             var_dump($pos);
             if (false === $pos) {
                 return $this->wrong_argv();
@@ -72,22 +82,24 @@ class CustomCrawler
                 fwrite(STDERR, chr(27) . "k{$i}/{$total}" . chr(27) . "\\");
                 error_log($i . '/' . count($ids));
                 $i ++;
-                $u = Updater2::updateBussiness($id);
+                $u = Updater2::updateBussiness($id, [], $id_county[$id] ?? null);
                 if ($u) {
                     $u->updateSearch();
                 }
             }
         } else {
             $ids = Crawler::crawlerBussiness($year, $month);
-            $ids = array_unique($ids);
-            file_put_contents('ids', implode("\n", $ids));
+            file_put_contents('ids', implode("\n", array_map(
+                function($id, $c) { return "{$id},{$c}"; },
+                array_keys($ids), $ids
+            )));
             $i = 1;
             $total = count($ids);
-            foreach ($ids as $id) {
+            foreach ($ids as $id => $id_county) {
                 fwrite(STDERR, chr(27) . "k{$i}/{$total}" . chr(27) . "\\");
                 error_log($i . '/' . count($ids));
                 $i ++;
-                $u = Updater2::updateBussiness($id);
+                $u = Updater2::updateBussiness($id, [], $id_county);
                 if ($u) {
                     $u->updateSearch();
                 }
