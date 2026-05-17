@@ -71,7 +71,7 @@ class Crawler
         );
 
         $ret = array();
-        foreach ($orginations as $ori_id => $type_name) {
+        foreach ($orginations as $ori_id => $area_name) {
             foreach ($types as $type_id => $type_name) {
                 $yearmonth = sprintf("%03d%02d", $year, $month);
                 $url = "https://serv.gcis.nat.gov.tw/moeadsBF/cmpy/reportAction.do?method=report&reportClass=bms&subPath={$yearmonth}&fileName={$ori_id}{$type_id}{$yearmonth}.pdf";
@@ -81,7 +81,9 @@ class Crawler
                     trigger_error("Fetch failed: {$ori_id}-{$type_id}-{$year}-{$month}", E_USER_WARNING);
                     continue;
                 }
-                $ret = array_merge($ret, self::convert($file));
+                foreach (self::convert($file) as $id) {
+                    $ret[$id] = $area_name;
+                }
                 unlink($file);
             }
         }
