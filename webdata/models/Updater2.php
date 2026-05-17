@@ -440,6 +440,9 @@ class Updater2
             $info = curl_getinfo($curl);
             curl_close($curl);
             if (200 == $info['http_code']) {
+                if (strpos($content, '非常態介接次數') !== false) {
+                    throw new Exception("API 超過呼叫次數限制（非常態介接次數），請稍後再試\nURL: {$url}");
+                }
                 return $content;
             }
             if ($i) {
