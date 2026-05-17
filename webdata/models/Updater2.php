@@ -431,7 +431,7 @@ class Updater2
                 curl_setopt($curl, CURLOPT_PROXY, getenv('PROXY_URL'));
             }
             curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($curl, CURLOPT_TIMEOUT, 20);
+            curl_setopt($curl, CURLOPT_TIMEOUT, 60);
             //curl_setopt($curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
             curl_setopt($curl, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0');
             curl_setopt($curl, CURLOPT_REFERER, $url); //'https://gcis.nat.gov.tw/pub/cmpy/cmpyInfoListAction.do');
